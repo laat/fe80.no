@@ -176,22 +176,8 @@
     const coarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
 
     // NetworkInformation.type is gated by RuntimeEnabled=NetInfoDownlinkMax in Blink,
-    // which on desktop is only exposed inside Worker contexts. Pull everything through
-    // a worker so we can read .type when available.
-    const workerSrc = `
-      self.onmessage = () => {
-        const c = self.navigator.connection || self.navigator.mozConnection || self.navigator.webkitConnection || {};
-        const snap = () => ({
-          type:          c.type          || null,
-          effectiveType: c.effectiveType || null,
-          rtt:           typeof c.rtt      === 'number' ? c.rtt      : null,
-          downlink:      typeof c.downlink === 'number' ? c.downlink : null,
-          saveData:      !!c.saveData,
-        });
-        self.postMessage(snap());
-        if (c && c.addEventListener) c.addEventListener('change', () => self.postMessage(snap()));
-      };
-    `;
+    // which on desktop is only exposed inside Worker contexts. The actual read lives
+    // in ./netinfo-worker.js so it shows up as a real file in DevTools Sources.
 
     // Window-context snapshot — used as a fallback and also merged over the worker snapshot
     // so any property the window DOES expose wins (e.g. effectiveType everywhere).
@@ -357,10 +343,12 @@
     applySignals(state.netinfo);
 
     // Spin up the worker to grab NetworkInformation.type where the window can't
+    console.log('[netinfo] window snapshot', state.netinfo);
     try {
-      const blob = new Blob([workerSrc], { type: 'application/javascript' });
-      const worker = new Worker(URL.createObjectURL(blob));
+      const worker = new Worker('./netinfo-worker.js');
+      worker.onerror = (err) => console.error('[netinfo] worker error', err);
       worker.onmessage = (e) => {
+        console.log('[netinfo] worker →', e.data);
         // Merge: prefer any non-null field from the worker, keep window values as fallback
         const merged = { ...state.netinfo };
         for (const k of Object.keys(e.data)) {
@@ -371,7 +359,7 @@
       worker.postMessage(null);
     } catch (err) {
       // Worker creation failed (CSP, sandbox, etc) — fall back to the window snapshot only
-      console.warn('netinfo worker unavailable:', err);
+      console.warn('[netinfo] worker unavailable:', err);
     }
 
     function normalizeMac(raw) {
