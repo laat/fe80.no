@@ -313,18 +313,20 @@
                       : g.confidence === 'medium' ? '#33ff33'
                       : g.confidence === 'guess'  ? '#1aaa1a'
                       :                             '#1d661d';
-      document.getElementById('os-line').innerHTML =
-        `<span class="dim">OS            : </span><span style="color:#55ff55">${osLabels[detectedOS]}</span><br>` +
-        `<span class="dim">NETINFO.TYPE  : </span>${fmt(n.type ? n.type.toUpperCase() : null)}<br>` +
-        `<span class="dim">EFFECTIVE     : </span>${fmt(n.effectiveType)}<br>` +
-        `<span class="dim">RTT           : </span>${fmt(n.rtt, ' ms')}<br>` +
-        `<span class="dim">DOWNLINK      : </span>${fmt(n.downlink, ' Mbps')}<br>` +
-        `<span class="dim">SAVE-DATA     : </span>${fmt(n.saveData ? 'on' : 'off')}<br>` +
-        `<span class="dim">UA.MOBILE     : </span>${fmt(uadMobile ? 'yes' : 'no')}<br>` +
-        `<span class="dim">POINTER.COARSE: </span>${fmt(coarsePointer ? 'yes' : 'no')}<br>` +
-        `<span class="dim">→ BEST GUESS  : </span><span style="color:${confColor}">${(g.type || 'UNKNOWN').toUpperCase()}</span>` +
-        `<span class="dim"> (${g.confidence} — ${g.source})</span><br>` +
-        `<span class="dim">IFACE GUESS   : </span><span style="color:#55ff55">${state.scopes[0].iface}</span><span class="dim"> — ${state.scopes[0].label}</span>`;
+      // Debug signal panel is temporarily hidden — uncomment any line to surface it again.
+      const lines = [
+        `<span class="dim">OS         : </span><span style="color:#55ff55">${osLabels[detectedOS]}</span>`,
+        // `<span class="dim">NETINFO.TYPE  : </span>${fmt(n.type ? n.type.toUpperCase() : null)}`,
+        // `<span class="dim">EFFECTIVE     : </span>${fmt(n.effectiveType)}`,
+        // `<span class="dim">RTT           : </span>${fmt(n.rtt, ' ms')}`,
+        // `<span class="dim">DOWNLINK      : </span>${fmt(n.downlink, ' Mbps')}`,
+        // `<span class="dim">SAVE-DATA     : </span>${fmt(n.saveData ? 'on' : 'off')}`,
+        // `<span class="dim">UA.MOBILE     : </span>${fmt(uadMobile ? 'yes' : 'no')}`,
+        // `<span class="dim">POINTER.COARSE: </span>${fmt(coarsePointer ? 'yes' : 'no')}`,
+        // `<span class="dim">→ BEST GUESS  : </span><span style="color:${confColor}">${(g.type || 'UNKNOWN').toUpperCase()}</span><span class="dim"> (${g.confidence} — ${g.source})</span>`,
+        `<span class="dim">IFACE GUESS: </span><span style="color:#55ff55">${state.scopes[0].iface}</span><span class="dim"> — ${state.scopes[0].label}</span>`,
+      ];
+      document.getElementById('os-line').innerHTML = lines.join('<br>');
     }
 
     function applySignals(netinfo) {
