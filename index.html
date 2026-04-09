@@ -170,7 +170,7 @@
       const fe80s = [];
       const others = [];
 
-      const pc = new RTCPeerConnection({ iceServers: [] });
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
       pc.createDataChannel('');
 
       pc.onicecandidate = (e) => {
