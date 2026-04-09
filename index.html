@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>fe80.no — link-local discovery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #080c08;
+      color: #33ff33;
+      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0,0,0,0.07) 3px,
+        rgba(0,0,0,0.07) 4px
+      );
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 620px;
+    }
+
+    .hdr {
+      color: #1d8c1d;
+      font-size: 12px;
+      white-space: pre;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+    }
+
+    .dim  { color: #1d661d; }
+    .mid  { color: #1aaa1a; }
+    .rule { color: #1d661d; margin: 0.8rem 0; }
+
+    #status {
+      color: #1aaa1a;
+      font-size: 13px;
+      min-height: 22px;
+      margin: 1rem 0 1.5rem;
+    }
+
+    #address-box { display: none; margin: 0.5rem 0 1.5rem; }
+
+    .addr-label {
+      color: #1d8c1d;
+      font-size: 11px;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+
+    #addr-text {
+      font-size: 26px;
+      color: #88ffaa;
+      letter-spacing: 2px;
+      word-break: break-all;
+      line-height: 1.4;
+      margin-bottom: 14px;
+    }
+
+    #copy-btn {
+      background: transparent;
+      border: 1px solid #33ff33;
+      color: #33ff33;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 13px;
+      padding: 6px 18px;
+      cursor: pointer;
+      letter-spacing: 1px;
+    }
+    #copy-btn:hover { background: #0a1f0a; }
+    #copy-btn.copied { color: #88ffaa; border-color: #88ffaa; }
+
+    #other { margin-top: 1.2rem; }
+    .other-label { color: #1d661d; font-size: 11px; letter-spacing: 1px; margin-bottom: 4px; }
+    .other-row { font-size: 12px; color: #1d661d; margin: 2px 0; }
+
+    #no-fe80 {
+      display: none;
+      color: #ff6633;
+      font-size: 13px;
+      margin-top: 1rem;
+      line-height: 1.7;
+    }
+    #no-fe80 span { font-size: 11px; color: #1d661d; }
+
+    #scan-btn {
+      background: transparent;
+      border: 1px solid #1d661d;
+      color: #1aaa1a;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 13px;
+      padding: 7px 18px;
+      cursor: pointer;
+      letter-spacing: 1px;
+      margin-top: 1.5rem;
+      display: block;
+    }
+    #scan-btn:hover { border-color: #33ff33; color: #33ff33; }
+
+    .blink { animation: bl 1s step-end infinite; }
+    @keyframes bl { 50% { opacity: 0; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <pre class="hdr"> ___  ___ ___  ___
+| __|| __|( _ )/ _ \
+| _| | _|/ _ \ (_) |
+|_|  |___\___/\___/  .no   <span class="dim">──</span> LINK-LOCAL DISCOVERY BBS</pre>
+
+    <div class="rule">────────────────────────────────────────</div>
+    <div style="font-size: 12px;">
+      <span class="dim">SYSOP :</span> <span class="mid">fe80.no</span><span class="dim"> // NODE 1 // ALWAYS ONLINE</span>
+    </div>
+    <div class="rule">────────────────────────────────────────</div>
+
+    <div id="status"><span class="blink">█</span> READY. AWAITING CALLER.</div>
+
+    <div id="address-box">
+      <div class="addr-label">YOUR FE80:: ADDRESS</div>
+      <div id="addr-text"></div>
+      <button id="copy-btn" onclick="copyAddr()">[ COPY ]</button>
+    </div>
+
+    <div id="no-fe80">
+      NO FE80:: ADDRESS DETECTED.<br>
+      <span>WebRTC may be blocked, or your OS has not assigned a link-local address.</span>
+    </div>
+
+    <div id="other"></div>
+
+    <button id="scan-btn" onclick="runScan()">[ IDENTIFY YOURSELF ]</button>
+  </div>
+
+  <script>
+    let foundAddr = '';
+
+    function runScan() {
+      document.getElementById('scan-btn').style.display = 'none';
+      document.getElementById('address-box').style.display = 'none';
+      document.getElementById('no-fe80').style.display = 'none';
+      document.getElementById('other').innerHTML = '';
+
+      const statusEl = document.getElementById('status');
+      statusEl.innerHTML = '<span class="blink">█</span> CONNECTING...';
+
+      const ips = new Set();
+      const fe80s = [];
+      const others = [];
+
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      pc.createDataChannel('');
+
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) { pc.close(); finish(fe80s, others); return; }
+        const parts = e.candidate.candidate.split(' ');
+        const ip = parts[4];
+        if (ip && !ips.has(ip)) {
+          ips.add(ip);
+          if (ip.toLowerCase().startsWith('fe80')) fe80s.push(ip);
+          else others.push(ip);
+        }
+      };
+
+      pc.createOffer().then(o => pc.setLocalDescription(o));
+      setTimeout(() => { try { pc.close(); } catch(e) {} finish(fe80s, others); }, 4000);
+    }
+
+    function finish(fe80s, others) {
+      const statusEl = document.getElementById('status');
+
+      if (fe80s.length === 0) {
+        statusEl.textContent = 'SCAN COMPLETE.';
+        document.getElementById('no-fe80').style.display = 'block';
+      } else {
+        foundAddr = fe80s[0];
+        document.getElementById('addr-text').textContent = foundAddr;
+        document.getElementById('address-box').style.display = 'block';
+        const fragment = foundAddr.split(':').slice(-2).join('').toUpperCase();
+        statusEl.textContent = 'WELCOME, ' + fragment + '. YOU ARE KNOWN TO THIS SYSTEM.';
+      }
+
+      if (others.length > 0) {
+        const el = document.getElementById('other');
+        el.innerHTML = '<div class="other-label">OTHER ADDRESSES ON THIS NODE</div>';
+        others.forEach(ip => {
+          el.innerHTML += '<div class="other-row">  ' + ip + '</div>';
+        });
+      }
+
+      const btn = document.getElementById('scan-btn');
+      btn.textContent = '[ SCAN AGAIN ]';
+      btn.style.display = 'block';
+    }
+
+    function copyAddr() {
+      if (!foundAddr) return;
+      navigator.clipboard.writeText(foundAddr).then(() => {
+        const btn = document.getElementById('copy-btn');
+        btn.textContent = '[ COPIED ]';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = '[ COPY ]'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
