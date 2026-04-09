@@ -5,20 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>fe80.no — link-local discovery</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=block" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       background: #080c08;
       color: #33ff33;
-      font-family: 'Share Tech Mono', 'Courier New', monospace;
+      font-family: 'Share Tech Mono', monospace;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 2rem;
+      opacity: 0;
+      transition: opacity 0.15s ease;
     }
+
+    body.ready { opacity: 1; }
 
     body::before {
       content: '';
@@ -42,187 +47,260 @@
       max-width: 620px;
     }
 
-    .hdr {
+    pre.hdr {
       color: #1d8c1d;
-      font-size: 12px;
-      white-space: pre;
+      font-size: 13px;
+      font-family: 'Share Tech Mono', monospace;
       line-height: 1.15;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.4rem;
     }
 
     .dim  { color: #1d661d; }
-    .mid  { color: #1aaa1a; }
-    .rule { color: #1d661d; margin: 0.8rem 0; }
+    .rule { color: #1d661d; margin: 0.8rem 0; font-size: 14px; }
+    .lbl  { color: #1d8c1d; font-size: 11px; letter-spacing: 2px; margin-bottom: 6px; }
 
-    #status {
-      color: #1aaa1a;
-      font-size: 13px;
-      min-height: 22px;
-      margin: 1rem 0 1.5rem;
+    #os-line { font-size: 12px; margin-bottom: 1rem; line-height: 1.8; }
+
+    #mac-input {
+      background: transparent;
+      border: 1px solid #1d661d;
+      color: #55ff55;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 18px;
+      padding: 8px 12px;
+      width: 100%;
+      letter-spacing: 3px;
+      outline: none;
+      margin-bottom: 4px;
     }
+    #mac-input:focus { border-color: #33ff33; }
+    #mac-input::placeholder { color: #1d661d; letter-spacing: 2px; }
 
-    #address-box { display: none; margin: 0.5rem 0 1.5rem; }
+    #mac-hint { font-size: 11px; color: #1d661d; margin-bottom: 1.4rem; min-height: 16px; }
+    #mac-hint.err { color: #ff6633; }
 
-    .addr-label {
-      color: #1d8c1d;
-      font-size: 11px;
-      letter-spacing: 2px;
-      margin-bottom: 8px;
-    }
+    #result { display: none; margin-top: 0.5rem; }
 
-    #addr-text {
+    .addr-big {
       font-size: 26px;
       color: #88ffaa;
       letter-spacing: 2px;
       word-break: break-all;
       line-height: 1.4;
-      margin-bottom: 14px;
+      margin: 6px 0 14px;
     }
 
-    #copy-btn {
-      background: transparent;
-      border: 1px solid #33ff33;
-      color: #33ff33;
-      font-family: 'Share Tech Mono', monospace;
-      font-size: 13px;
-      padding: 6px 18px;
-      cursor: pointer;
-      letter-spacing: 1px;
-    }
-    #copy-btn:hover { background: #0a1f0a; }
-    #copy-btn.copied { color: #88ffaa; border-color: #88ffaa; }
-
-    #other { margin-top: 1.2rem; }
-    .other-label { color: #1d661d; font-size: 11px; letter-spacing: 1px; margin-bottom: 4px; }
-    .other-row { font-size: 12px; color: #1d661d; margin: 2px 0; }
-
-    #no-fe80 {
-      display: none;
-      color: #ff6633;
-      font-size: 13px;
+    .scope-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
       margin-top: 1rem;
-      line-height: 1.7;
     }
-    #no-fe80 span { font-size: 11px; color: #1d661d; }
 
-    #scan-btn {
+    .scope-card { border: 1px solid #1d661d; padding: 8px 10px; font-size: 11px; }
+    .scope-card.active { border-color: #55ff55; background: #040d04; }
+    .scope-os    { color: #1aaa1a; margin-bottom: 2px; letter-spacing: 1px; }
+    .scope-iface { color: #1d661d; font-size: 10px; margin-bottom: 4px; }
+    .scope-addr  { color: #55ff55; font-size: 12px; word-break: break-all; line-height: 1.5; }
+    .scope-card.active .scope-addr { color: #88ffaa; }
+    .scope-badge { font-size: 9px; color: #33ff33; letter-spacing: 1px; margin-bottom: 4px; }
+
+    .scope-copy {
       background: transparent;
       border: 1px solid #1d661d;
       color: #1aaa1a;
       font-family: 'Share Tech Mono', monospace;
-      font-size: 13px;
-      padding: 7px 18px;
+      font-size: 10px;
+      padding: 3px 8px;
       cursor: pointer;
+      margin-top: 6px;
       letter-spacing: 1px;
-      margin-top: 1.5rem;
       display: block;
+      width: 100%;
     }
-    #scan-btn:hover { border-color: #33ff33; color: #33ff33; }
+    .scope-copy:hover { border-color: #33ff33; color: #33ff33; }
+    .scope-copy.ok    { color: #88ffaa; border-color: #88ffaa; }
 
-    .blink { animation: bl 1s step-end infinite; }
-    @keyframes bl { 50% { opacity: 0; } }
+    .step-row  { font-size: 12px; color: #1d661d; margin: 3px 0; line-height: 1.6; }
+    .step-hi   { color: #55ff55; }
+    .step-flip { color: #ffaa33; }
   </style>
 </head>
 <body>
   <div class="container">
-    <pre class="hdr"> ___  ___ ___  ___
-| __|| __|( _ )/ _ \
-| _| | _|/ _ \ (_) |
-|_|  |___\___/\___/  .no   <span class="dim">──</span> LINK-LOCAL DISCOVERY BBS</pre>
+    <pre class="hdr">███████╗███████╗ █████╗  ██████╗
+██╔════╝██╔════╝██╔══██╗██╔═████╗
+█████╗  █████╗  ╚█████╔╝██║██╔██║
+██╔══╝  ██╔══╝  ██╔══██╗████╔╝██║
+██║     ███████╗╚█████╔╝╚██████╔╝
+╚═╝     ╚══════╝ ╚════╝  ╚═════╝
+<span style="color:#1d661d">.no ── EUI-64 LINK-LOCAL GENERATOR</span></pre>
 
     <div class="rule">────────────────────────────────────────</div>
-    <div style="font-size: 12px;">
-      <span class="dim">SYSOP :</span> <span class="mid">fe80.no</span><span class="dim"> // NODE 1 // ALWAYS ONLINE</span>
-    </div>
+    <div id="os-line"></div>
     <div class="rule">────────────────────────────────────────</div>
 
-    <div id="status"><span class="blink">█</span> READY. AWAITING CALLER.</div>
-
-    <div id="address-box">
-      <div class="addr-label">YOUR FE80:: ADDRESS</div>
-      <div id="addr-text"></div>
-      <button id="copy-btn" onclick="copyAddr()">[ COPY ]</button>
+    <div style="margin-top: 1rem;">
+      <div class="lbl">ENTER MAC ADDRESS</div>
+      <input id="mac-input" type="text" placeholder="aa:bb:cc:dd:ee:ff" oninput="onMac(this.value)" spellcheck="false" maxlength="17" autocomplete="off" />
+      <div id="mac-hint">colons, dashes, or raw hex — whatever you have</div>
     </div>
 
-    <div id="no-fe80">
-      NO FE80:: ADDRESS DETECTED.<br>
-      <span>WebRTC may be blocked, or your OS has not assigned a link-local address.</span>
+    <div id="result">
+      <div class="lbl">YOUR LINK-LOCAL ADDRESS</div>
+      <div class="addr-big" id="addr-out"></div>
+      <div id="steps"></div>
+      <div class="rule" style="margin-top: 1.2rem;">────────────────────────────────────────</div>
+      <div class="lbl" style="margin-top: 0.8rem;">SCOPED ADDRESS</div>
+      <div class="scope-grid" id="scope-grid"></div>
     </div>
-
-    <div id="other"></div>
-
-    <button id="scan-btn" onclick="runScan()">[ IDENTIFY YOURSELF ]</button>
   </div>
 
   <script>
-    let foundAddr = '';
+    document.fonts.ready.then(() => document.body.classList.add('ready'));
 
-    function runScan() {
-      document.getElementById('scan-btn').style.display = 'none';
-      document.getElementById('address-box').style.display = 'none';
-      document.getElementById('no-fe80').style.display = 'none';
-      document.getElementById('other').innerHTML = '';
+    const ua       = navigator.userAgent;
+    const conn     = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+    const connType = conn.type || null;
 
-      const statusEl = document.getElementById('status');
-      statusEl.innerHTML = '<span class="blink">█</span> CONNECTING...';
+    const isMac     = ua.includes('Mac OS X') && !ua.includes('iPhone') && !ua.includes('iPad');
+    const isWin     = ua.includes('Windows');
+    const isLinux   = ua.includes('Linux') && !ua.includes('Android');
+    const isAndroid = ua.includes('Android');
+    const isIOS     = ua.includes('iPhone') || ua.includes('iPad');
 
-      const ips = new Set();
-      const fe80s = [];
-      const others = [];
+    const detectedOS = isMac ? 'macos' : isWin ? 'windows' : isLinux ? 'linux' : isAndroid ? 'android' : isIOS ? 'ios' : 'unknown';
 
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
-      pc.createDataChannel('');
+    function guessScopes(os, conn) {
+      const isWifi     = conn === 'wifi';
+      const isEthernet = conn === 'ethernet';
 
-      pc.onicecandidate = (e) => {
-        if (!e.candidate) { pc.close(); finish(fe80s, others); return; }
-        const parts = e.candidate.candidate.split(' ');
-        const ip = parts[4];
-        if (ip && !ips.has(ip)) {
-          ips.add(ip);
-          if (ip.toLowerCase().startsWith('fe80')) fe80s.push(ip);
-          else others.push(ip);
-        }
-      };
-
-      pc.createOffer().then(o => pc.setLocalDescription(o));
-      setTimeout(() => { try { pc.close(); } catch(e) {} finish(fe80s, others); }, 4000);
+      if (os === 'macos') {
+        if (isEthernet) return [
+          { iface: 'en1',   label: 'ethernet (Thunderbolt/USB-C)' },
+          { iface: 'en0',   label: 'Wi-Fi (if also connected)' },
+          { iface: 'en2',   label: 'alt ethernet adapter' },
+        ];
+        return [
+          { iface: 'en0',   label: 'Wi-Fi' },
+          { iface: 'en1',   label: 'ethernet / Thunderbolt' },
+          { iface: 'utun0', label: 'VPN / tunnel' },
+        ];
+      }
+      if (os === 'linux') {
+        if (isWifi) return [
+          { iface: 'wlan0',   label: 'Wi-Fi' },
+          { iface: 'wlp2s0', label: 'Wi-Fi (PCI path)' },
+          { iface: 'eth0',   label: 'ethernet (if also connected)' },
+        ];
+        if (isEthernet) return [
+          { iface: 'eth0',   label: 'ethernet' },
+          { iface: 'ens3',   label: 'ethernet (systemd / cloud)' },
+          { iface: 'enp3s0', label: 'ethernet (PCI path)' },
+        ];
+        return [
+          { iface: 'eth0',   label: 'ethernet' },
+          { iface: 'wlan0',  label: 'Wi-Fi' },
+          { iface: 'ens3',   label: 'cloud / VM' },
+        ];
+      }
+      if (os === 'windows') return [
+        { iface: '3',  label: 'run Get-NetAdapter to confirm' },
+        { iface: '4',  label: 'alt index' },
+        { iface: '12', label: 'alt index' },
+      ];
+      if (os === 'android') return isWifi
+        ? [{ iface: 'wlan0',  label: 'Wi-Fi'     }, { iface: 'rmnet0', label: 'cellular' }]
+        : [{ iface: 'rmnet0', label: 'cellular'  }, { iface: 'wlan0',  label: 'Wi-Fi'    }];
+      if (os === 'ios') return [
+        { iface: 'en0',     label: 'Wi-Fi'     },
+        { iface: 'pdp_ip0', label: 'cellular'  },
+      ];
+      return [
+        { iface: 'en0',   label: 'macOS Wi-Fi'     },
+        { iface: 'eth0',  label: 'Linux ethernet'  },
+        { iface: 'wlan0', label: 'Linux Wi-Fi'     },
+      ];
     }
 
-    function finish(fe80s, others) {
-      const statusEl = document.getElementById('status');
+    const scopes   = guessScopes(detectedOS, connType);
+    const osLabels = { macos: 'MACOS', linux: 'LINUX', windows: 'WINDOWS', ios: 'IOS', android: 'ANDROID', unknown: 'UNKNOWN' };
 
-      if (fe80s.length === 0) {
-        statusEl.textContent = 'SCAN COMPLETE.';
-        document.getElementById('no-fe80').style.display = 'block';
-      } else {
-        foundAddr = fe80s[0];
-        document.getElementById('addr-text').textContent = foundAddr;
-        document.getElementById('address-box').style.display = 'block';
-        const fragment = foundAddr.split(':').slice(-2).join('').toUpperCase();
-        statusEl.textContent = 'WELCOME, ' + fragment + '. YOU ARE KNOWN TO THIS SYSTEM.';
-      }
+    document.getElementById('os-line').innerHTML =
+      `<span class="dim">OS         : </span><span style="color:#55ff55">${osLabels[detectedOS]}</span><br>` +
+      `<span class="dim">CONNECTION : </span><span style="color:#55ff55">${connType ? connType.toUpperCase() : 'UNKNOWN'}</span><br>` +
+      `<span class="dim">IFACE GUESS: </span><span style="color:#55ff55">${scopes[0].iface}</span><span class="dim"> — ${scopes[0].label}</span>`;
 
-      if (others.length > 0) {
-        const el = document.getElementById('other');
-        el.innerHTML = '<div class="other-label">OTHER ADDRESSES ON THIS NODE</div>';
-        others.forEach(ip => {
-          el.innerHTML += '<div class="other-row">  ' + ip + '</div>';
-        });
-      }
-
-      const btn = document.getElementById('scan-btn');
-      btn.textContent = '[ SCAN AGAIN ]';
-      btn.style.display = 'block';
+    function normalizeMac(raw) {
+      const clean = raw.replace(/[:\-\s]/g, '').toLowerCase();
+      if (!/^[0-9a-f]{12}$/.test(clean)) return null;
+      return clean.match(/.{2}/g);
     }
 
-    function copyAddr() {
-      if (!foundAddr) return;
-      navigator.clipboard.writeText(foundAddr).then(() => {
-        const btn = document.getElementById('copy-btn');
+    function eui64(bytes) {
+      const b = bytes.map(h => parseInt(h, 16));
+      b[0] ^= 0x02;
+      return [
+        b[0].toString(16).padStart(2, '0') + b[1].toString(16).padStart(2, '0'),
+        b[2].toString(16).padStart(2, '0') + 'ff',
+        'fe' + b[3].toString(16).padStart(2, '0'),
+        b[4].toString(16).padStart(2, '0') + b[5].toString(16).padStart(2, '0'),
+      ].join(':');
+    }
+
+    function copyScope(id, text) {
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById(id);
         btn.textContent = '[ COPIED ]';
-        btn.classList.add('copied');
-        setTimeout(() => { btn.textContent = '[ COPY ]'; btn.classList.remove('copied'); }, 2000);
+        btn.classList.add('ok');
+        setTimeout(() => { btn.textContent = '[ COPY ]'; btn.classList.remove('ok'); }, 2000);
       });
+    }
+
+    function onMac(raw) {
+      const hint   = document.getElementById('mac-hint');
+      const result = document.getElementById('result');
+      const bytes  = normalizeMac(raw);
+
+      if (!bytes) {
+        result.style.display = 'none';
+        if (raw.replace(/[:\-\s]/g, '').length >= 12) {
+          hint.textContent = 'invalid mac address'; hint.className = 'err';
+        } else {
+          hint.textContent = 'colons, dashes, or raw hex — whatever you have'; hint.className = '';
+        }
+        return;
+      }
+
+      hint.textContent = ''; hint.className = '';
+
+      const origFirst = parseInt(bytes[0], 16);
+      const flipped   = origFirst ^ 0x02;
+      const host      = eui64(bytes);
+      const addr      = 'fe80::' + host;
+
+      document.getElementById('addr-out').textContent = addr;
+
+      document.getElementById('steps').innerHTML = `
+        <div class="step-row dim">── EUI-64 ────────────────────────────────</div>
+        <div class="step-row"><span class="dim">1. mac    </span><span class="step-hi">${bytes.join(':')}</span></div>
+        <div class="step-row"><span class="dim">2. insert </span><span class="step-hi">${bytes.slice(0,3).join(':')}</span><span class="dim">:ff:fe:</span><span class="step-hi">${bytes.slice(3).join(':')}</span></div>
+        <div class="step-row"><span class="dim">3. flip   </span><span class="step-flip">${origFirst.toString(16).padStart(2,'0')} → ${flipped.toString(16).padStart(2,'0')}</span><span class="dim"> (U/L bit)</span></div>
+      `;
+
+      document.getElementById('scope-grid').innerHTML = scopes.map((s, i) => {
+        const full = `${addr}%${s.iface}`;
+        return `
+          <div class="scope-card${i === 0 ? ' active' : ''}">
+            ${i === 0 ? '<div class="scope-badge">&#9658; BEST GUESS</div>' : ''}
+            <div class="scope-os">${s.iface}</div>
+            <div class="scope-iface">${s.label}</div>
+            <div class="scope-addr">${full}</div>
+            <button class="scope-copy" id="cp${i}" onclick="copyScope('cp${i}','${full}')">[ COPY ]</button>
+          </div>`;
+      }).join('');
+
+      result.style.display = 'block';
     }
   </script>
 </body>
