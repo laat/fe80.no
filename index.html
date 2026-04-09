@@ -160,8 +160,6 @@
     document.fonts.ready.then(() => document.body.classList.add('ready'));
 
     const ua       = navigator.userAgent;
-    const conn     = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
-    const connType = conn.type || null;
 
     const isMac     = ua.includes('Mac OS X') && !ua.includes('iPhone') && !ua.includes('iPad');
     const isWin     = ua.includes('Windows');
@@ -170,6 +168,90 @@
     const isIOS     = ua.includes('iPhone') || ua.includes('iPad');
 
     const detectedOS = isMac ? 'macos' : isWin ? 'windows' : isLinux ? 'linux' : isAndroid ? 'android' : isIOS ? 'ios' : 'unknown';
+
+    // UA Client Hints — present in Chromium, absent in Safari/Firefox
+    const uadMobile = (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean')
+      ? navigator.userAgentData.mobile
+      : /Mobi|Android|iPhone|iPad/.test(ua);
+    const coarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+
+    // NetworkInformation.type is gated by RuntimeEnabled=NetInfoDownlinkMax in Blink,
+    // which on desktop is only exposed inside Worker contexts. Pull everything through
+    // a worker so we can read .type when available.
+    const workerSrc = `
+      self.onmessage = () => {
+        const c = self.navigator.connection || self.navigator.mozConnection || self.navigator.webkitConnection || {};
+        const snap = () => ({
+          type:          c.type          || null,
+          effectiveType: c.effectiveType || null,
+          rtt:           typeof c.rtt      === 'number' ? c.rtt      : null,
+          downlink:      typeof c.downlink === 'number' ? c.downlink : null,
+          saveData:      !!c.saveData,
+        });
+        self.postMessage(snap());
+        if (c && c.addEventListener) c.addEventListener('change', () => self.postMessage(snap()));
+      };
+    `;
+
+    // Window-context snapshot — used as a fallback and also merged over the worker snapshot
+    // so any property the window DOES expose wins (e.g. effectiveType everywhere).
+    function winSnapshot() {
+      const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+      return {
+        type:          c.type          || null,
+        effectiveType: c.effectiveType || null,
+        rtt:           typeof c.rtt      === 'number' ? c.rtt      : null,
+        downlink:      typeof c.downlink === 'number' ? c.downlink : null,
+        saveData:      !!c.saveData,
+      };
+    }
+
+    // Priority cascade over every available signal. Each branch returns
+    // { type, confidence, source } so the UI can show why it chose what it chose.
+    function inferConnection(netinfo) {
+      // 1. Direct read (worker most likely path on desktop)
+      if (netinfo.type) {
+        return { type: netinfo.type, confidence: 'direct', source: 'NetworkInformation.type' };
+      }
+
+      // 2. saveData → almost always a metered mobile connection
+      if (netinfo.saveData) {
+        return { type: 'cellular', confidence: 'high', source: 'saveData=true' };
+      }
+
+      // 3. effectiveType is the strongest proxy for cellular when it's slow
+      if (netinfo.effectiveType && /^(slow-2g|2g|3g)$/.test(netinfo.effectiveType)) {
+        return { type: 'cellular', confidence: 'high', source: 'effectiveType=' + netinfo.effectiveType };
+      }
+
+      // 4. Mobile device + high RTT = cellular
+      if (uadMobile && netinfo.rtt != null && netinfo.rtt >= 150) {
+        return { type: 'cellular', confidence: 'medium', source: 'mobile + rtt=' + netinfo.rtt + 'ms' };
+      }
+
+      // 5. Very low RTT + high downlink on a desktop = probably ethernet
+      if (!uadMobile && netinfo.rtt != null && netinfo.rtt > 0 && netinfo.rtt < 20
+          && netinfo.downlink != null && netinfo.downlink >= 10) {
+        return { type: 'ethernet', confidence: 'medium', source: 'rtt=' + netinfo.rtt + 'ms, downlink=' + netinfo.downlink + 'Mbps' };
+      }
+
+      // 6. Mobile device, otherwise-healthy RTT = wifi (phone on wifi)
+      if (uadMobile && netinfo.rtt != null && netinfo.rtt < 100) {
+        return { type: 'wifi', confidence: 'medium', source: 'mobile + rtt=' + netinfo.rtt + 'ms' };
+      }
+
+      // 7. Mobile OS with no other info — guess wifi (most common state)
+      if (detectedOS === 'android' || detectedOS === 'ios') {
+        return { type: 'wifi', confidence: 'guess', source: 'mobile OS default' };
+      }
+
+      // 8. Desktop OS — wifi is the safer default than ethernet these days
+      if (detectedOS === 'macos' || detectedOS === 'windows' || detectedOS === 'linux') {
+        return { type: 'wifi', confidence: 'guess', source: 'desktop OS default' };
+      }
+
+      return { type: null, confidence: 'none', source: 'no signal' };
+    }
 
     function guessScopes(os, conn) {
       const isWifi     = conn === 'wifi';
@@ -223,13 +305,74 @@
       ];
     }
 
-    const scopes   = guessScopes(detectedOS, connType);
     const osLabels = { macos: 'MACOS', linux: 'LINUX', windows: 'WINDOWS', ios: 'IOS', android: 'ANDROID', unknown: 'UNKNOWN' };
 
-    document.getElementById('os-line').innerHTML =
-      `<span class="dim">OS         : </span><span style="color:#55ff55">${osLabels[detectedOS]}</span><br>` +
-      `<span class="dim">CONNECTION : </span><span style="color:#55ff55">${connType ? connType.toUpperCase() : 'UNKNOWN'}</span><br>` +
-      `<span class="dim">IFACE GUESS: </span><span style="color:#55ff55">${scopes[0].iface}</span><span class="dim"> — ${scopes[0].label}</span>`;
+    // Live state — replaced whenever a new signal arrives (worker snapshot, change event)
+    let state = {
+      netinfo: winSnapshot(),
+      guess:   { type: null, confidence: 'pending', source: 'waiting for worker' },
+      scopes:  guessScopes(detectedOS, null),
+    };
+
+    function fmt(v, unit) {
+      if (v == null) return '<span class="dim">—</span>';
+      return `<span style="color:#55ff55">${v}${unit || ''}</span>`;
+    }
+
+    function renderOsLine() {
+      const n = state.netinfo;
+      const g = state.guess;
+      const confColor = g.confidence === 'direct' ? '#88ffaa'
+                      : g.confidence === 'high'   ? '#55ff55'
+                      : g.confidence === 'medium' ? '#33ff33'
+                      : g.confidence === 'guess'  ? '#1aaa1a'
+                      :                             '#1d661d';
+      document.getElementById('os-line').innerHTML =
+        `<span class="dim">OS            : </span><span style="color:#55ff55">${osLabels[detectedOS]}</span><br>` +
+        `<span class="dim">NETINFO.TYPE  : </span>${fmt(n.type ? n.type.toUpperCase() : null)}<br>` +
+        `<span class="dim">EFFECTIVE     : </span>${fmt(n.effectiveType)}<br>` +
+        `<span class="dim">RTT           : </span>${fmt(n.rtt, ' ms')}<br>` +
+        `<span class="dim">DOWNLINK      : </span>${fmt(n.downlink, ' Mbps')}<br>` +
+        `<span class="dim">SAVE-DATA     : </span>${fmt(n.saveData ? 'on' : 'off')}<br>` +
+        `<span class="dim">UA.MOBILE     : </span>${fmt(uadMobile ? 'yes' : 'no')}<br>` +
+        `<span class="dim">POINTER.COARSE: </span>${fmt(coarsePointer ? 'yes' : 'no')}<br>` +
+        `<span class="dim">→ BEST GUESS  : </span><span style="color:${confColor}">${(g.type || 'UNKNOWN').toUpperCase()}</span>` +
+        `<span class="dim"> (${g.confidence} — ${g.source})</span><br>` +
+        `<span class="dim">IFACE GUESS   : </span><span style="color:#55ff55">${state.scopes[0].iface}</span><span class="dim"> — ${state.scopes[0].label}</span>`;
+    }
+
+    function applySignals(netinfo) {
+      state.netinfo = netinfo;
+      state.guess   = inferConnection(netinfo);
+      state.scopes  = guessScopes(detectedOS, state.guess.type);
+      renderOsLine();
+      // If a MAC has already been entered, regenerate the scope cards so they
+      // pick up the new interface guesses.
+      if (document.getElementById('result').style.display === 'block') {
+        onMac(document.getElementById('mac-input').value);
+      }
+    }
+
+    // Initial render from the window snapshot (may have effectiveType/rtt but no .type on desktop)
+    applySignals(state.netinfo);
+
+    // Spin up the worker to grab NetworkInformation.type where the window can't
+    try {
+      const blob = new Blob([workerSrc], { type: 'application/javascript' });
+      const worker = new Worker(URL.createObjectURL(blob));
+      worker.onmessage = (e) => {
+        // Merge: prefer any non-null field from the worker, keep window values as fallback
+        const merged = { ...state.netinfo };
+        for (const k of Object.keys(e.data)) {
+          if (e.data[k] != null && e.data[k] !== '') merged[k] = e.data[k];
+        }
+        applySignals(merged);
+      };
+      worker.postMessage(null);
+    } catch (err) {
+      // Worker creation failed (CSP, sandbox, etc) — fall back to the window snapshot only
+      console.warn('netinfo worker unavailable:', err);
+    }
 
     function normalizeMac(raw) {
       const clean = raw.replace(/[:\-\s]/g, '').toLowerCase();
@@ -288,11 +431,20 @@
         <div class="step-row"><span class="dim">3. flip   </span><span class="step-flip">${origFirst.toString(16).padStart(2,'0')} → ${flipped.toString(16).padStart(2,'0')}</span><span class="dim"> (U/L bit)</span></div>
       `;
 
-      document.getElementById('scope-grid').innerHTML = scopes.map((s, i) => {
+      const badge = {
+        direct:  { label: 'CONFIRMED',  color: '#88ffaa' },
+        high:    { label: 'BEST GUESS', color: '#55ff55' },
+        medium:  { label: 'LIKELY',     color: '#33ff33' },
+        guess:   { label: 'MAYBE',      color: '#1aaa1a' },
+        pending: { label: '…',          color: '#1d661d' },
+        none:    { label: '?',          color: '#1d661d' },
+      }[state.guess.confidence] || { label: '?', color: '#1d661d' };
+
+      document.getElementById('scope-grid').innerHTML = state.scopes.map((s, i) => {
         const full = `${addr}%${s.iface}`;
         return `
-          <div class="scope-card${i === 0 ? ' active' : ''}">
-            ${i === 0 ? '<div class="scope-badge">&#9658; BEST GUESS</div>' : ''}
+          <div class="scope-card${i === 0 ? ' active' : ''}"${i === 0 ? ` style="border-color:${badge.color}"` : ''}>
+            ${i === 0 ? `<div class="scope-badge" style="color:${badge.color}">&#9658; ${badge.label}</div>` : ''}
             <div class="scope-os">${s.iface}</div>
             <div class="scope-iface">${s.label}</div>
             <div class="scope-addr">${full}</div>
