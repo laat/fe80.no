@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Convert a MAC address to its IPv6 link-local (fe80::) EUI-64 address — or paste a fe80:: address and recover the MAC — with per-OS zone identifiers.">
+  <meta name="theme-color" content="#080c08">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23080c08'/%3E%3Ctext x='8' y='11.5' font-size='8' fill='%2333ff33' text-anchor='middle' font-family='monospace'%3Efe%3C/text%3E%3C/svg%3E">
   <title>fe80.no — link-local discovery</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,7 +59,7 @@
     }
 
     .dim  { color: #1d661d; }
-    .rule { color: #1d661d; margin: 0.8rem 0; font-size: 14px; }
+    .rule { color: #1d661d; margin: 0.8rem 0; font-size: 14px; overflow: hidden; white-space: nowrap; }
     .lbl  { color: #1d8c1d; font-size: 11px; letter-spacing: 2px; margin-bottom: 6px; }
 
     #os-line { font-size: 12px; margin-bottom: 1rem; line-height: 1.8; }
@@ -122,8 +125,20 @@
     .scope-copy.ok    { color: #88ffaa; border-color: #88ffaa; }
 
     .step-row  { font-size: 12px; color: #1d661d; margin: 3px 0; line-height: 1.6; }
+    .step-row.dim { overflow: hidden; white-space: nowrap; }
     .step-hi   { color: #55ff55; }
     .step-flip { color: #ffaa33; }
+
+    .note { font-size: 11px; color: #ffaa33; margin-top: 8px; line-height: 1.6; }
+
+    .copy-main { display: inline-block; width: auto; margin: 0 0 14px; }
+
+    @media (max-width: 560px) {
+      body { padding: 1rem; }
+      pre.hdr { font-size: 10px; }
+      .addr-big { font-size: 19px; }
+      .scope-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -141,14 +156,15 @@
     <div class="rule">────────────────────────────────────────</div>
 
     <div style="margin-top: 1rem;">
-      <div class="lbl">ENTER MAC ADDRESS</div>
-      <input id="mac-input" type="text" placeholder="aa:bb:cc:dd:ee:ff" oninput="onMac(this.value)" spellcheck="false" maxlength="17" autocomplete="off" />
-      <div id="mac-hint">colons, dashes, or raw hex — whatever you have</div>
+      <label class="lbl" for="mac-input">ENTER MAC OR LINK-LOCAL ADDRESS</label>
+      <input id="mac-input" type="text" placeholder="aa:bb:cc:dd:ee:ff" oninput="onMac(this.value)" spellcheck="false" maxlength="46" autocomplete="off" />
+      <div id="mac-hint">mac or fe80:: address — colons, dashes, dots, raw hex</div>
     </div>
 
-    <div id="result">
-      <div class="lbl">YOUR LINK-LOCAL ADDRESS</div>
+    <div id="result" aria-live="polite">
+      <div class="lbl" id="out-lbl">YOUR LINK-LOCAL ADDRESS</div>
       <div class="addr-big" id="addr-out"></div>
+      <button class="scope-copy copy-main" id="cp-main">[ COPY ]</button>
       <div id="steps"></div>
       <div class="rule" style="margin-top: 1.2rem;">────────────────────────────────────────</div>
       <div class="lbl" style="margin-top: 0.8rem;">SCOPED ADDRESS</div>
@@ -364,21 +380,75 @@
       console.warn('[netinfo] worker unavailable:', err);
     }
 
+    const HINT_DEFAULT = 'mac or fe80:: address — colons, dashes, dots, raw hex';
+    const hx = n => n.toString(16).padStart(2, '0');
+
     function normalizeMac(raw) {
-      const clean = raw.replace(/[:\-\s]/g, '').toLowerCase();
+      const clean = raw.replace(/[:\-.\s]/g, '').toLowerCase();
       if (!/^[0-9a-f]{12}$/.test(clean)) return null;
       return clean.match(/.{2}/g);
     }
 
-    function eui64(bytes) {
+    // MAC bytes → four 16-bit EUI-64 host groups (zero-padded hex)
+    function eui64Groups(bytes) {
       const b = bytes.map(h => parseInt(h, 16));
       b[0] ^= 0x02;
       return [
-        b[0].toString(16).padStart(2, '0') + b[1].toString(16).padStart(2, '0'),
-        b[2].toString(16).padStart(2, '0') + 'ff',
-        'fe' + b[3].toString(16).padStart(2, '0'),
-        b[4].toString(16).padStart(2, '0') + b[5].toString(16).padStart(2, '0'),
-      ].join(':');
+        hx(b[0]) + hx(b[1]),
+        hx(b[2]) + 'ff',
+        'fe' + hx(b[3]),
+        hx(b[4]) + hx(b[5]),
+      ];
+    }
+
+    // RFC 5952 presentation: strip leading zeros per group and let the ::
+    // swallow any leading all-zero host groups (the prefix zero run is always
+    // the longest, so this stays canonical).
+    function canonical(hostGroups) {
+      const g = hostGroups.map(x => x.replace(/^0+(?=.)/, ''));
+      let i = 0;
+      while (i < g.length && g[i] === '0') i++;
+      return 'fe80::' + g.slice(i).join(':');
+    }
+
+    // Parse a fe80::/64 address (optionally [bracketed] or with a %zone).
+    // Returns { host: four 4-hex-char groups, zone } or null.
+    function parseLinkLocal(raw) {
+      let s = raw.trim().toLowerCase();
+      if (s.startsWith('[')) s = s.replace(/^\[|\]$/g, '');
+      let zone = null;
+      const pct = s.indexOf('%');
+      if (pct !== -1) {
+        zone = s.slice(pct + 1);
+        s = s.slice(0, pct);
+        if (!/^[a-z0-9._-]+$/.test(zone)) return null;
+      }
+      if (!/^[0-9a-f:]+$/.test(s) || s.split('::').length > 2) return null;
+      const [l, r] = s.split('::');
+      const left  = l ? l.split(':') : [];
+      const right = s.includes('::') ? (r ? r.split(':') : []) : [];
+      let groups;
+      if (s.includes('::')) {
+        const fill = 8 - left.length - right.length;
+        if (fill < 1) return null;
+        groups = [...left, ...Array(fill).fill('0'), ...right];
+      } else {
+        if (left.length !== 8) return null;
+        groups = left;
+      }
+      if (groups.some(x => !/^[0-9a-f]{1,4}$/.test(x))) return null;
+      groups = groups.map(x => x.padStart(4, '0'));
+      if (groups[0] !== 'fe80' || groups.slice(1, 4).some(x => x !== '0000')) return null;
+      return { host: groups.slice(4), zone };
+    }
+
+    // Undo EUI-64: only possible when the ff:fe marker is present.
+    function macFromHost(host) {
+      const hex = host.join('');
+      if (hex.slice(6, 10) !== 'fffe') return null;
+      const bytes = (hex.slice(0, 6) + hex.slice(10)).match(/.{2}/g);
+      bytes[0] = hx(parseInt(bytes[0], 16) ^ 0x02);
+      return bytes;
     }
 
     function copyScope(id, text) {
@@ -390,36 +460,13 @@
       });
     }
 
-    function onMac(raw) {
-      const hint   = document.getElementById('mac-hint');
-      const result = document.getElementById('result');
-      const bytes  = normalizeMac(raw);
-
-      if (!bytes) {
-        result.style.display = 'none';
-        if (raw.replace(/[:\-\s]/g, '').length >= 12) {
-          hint.textContent = 'invalid mac address'; hint.className = 'err';
-        } else {
-          hint.textContent = 'colons, dashes, or raw hex — whatever you have'; hint.className = '';
-        }
-        return;
-      }
-
+    function showResult(big, scopeAddr, stepsHtml, scopes) {
+      const hint = document.getElementById('mac-hint');
       hint.textContent = ''; hint.className = '';
 
-      const origFirst = parseInt(bytes[0], 16);
-      const flipped   = origFirst ^ 0x02;
-      const host      = eui64(bytes);
-      const addr      = 'fe80::' + host;
-
-      document.getElementById('addr-out').textContent = addr;
-
-      document.getElementById('steps').innerHTML = `
-        <div class="step-row dim">── EUI-64 ────────────────────────────────</div>
-        <div class="step-row"><span class="dim">1. mac    </span><span class="step-hi">${bytes.join(':')}</span></div>
-        <div class="step-row"><span class="dim">2. insert </span><span class="step-hi">${bytes.slice(0,3).join(':')}</span><span class="dim">:ff:fe:</span><span class="step-hi">${bytes.slice(3).join(':')}</span></div>
-        <div class="step-row"><span class="dim">3. flip   </span><span class="step-flip">${origFirst.toString(16).padStart(2,'0')} → ${flipped.toString(16).padStart(2,'0')}</span><span class="dim"> (U/L bit)</span></div>
-      `;
+      document.getElementById('addr-out').textContent = big;
+      document.getElementById('cp-main').onclick = () => copyScope('cp-main', big);
+      document.getElementById('steps').innerHTML = stepsHtml;
 
       const badge = {
         direct:  { label: 'CONFIRMED',  color: '#88ffaa' },
@@ -430,8 +477,8 @@
         none:    { label: '?',          color: '#1d661d' },
       }[state.guess.confidence] || { label: '?', color: '#1d661d' };
 
-      document.getElementById('scope-grid').innerHTML = state.scopes.map((s, i) => {
-        const full = `${addr}%${s.iface}`;
+      document.getElementById('scope-grid').innerHTML = scopes.map((s, i) => {
+        const full = `${scopeAddr}%${s.iface}`;
         return `
           <div class="scope-card${i === 0 ? ' active' : ''}"${i === 0 ? ` style="border-color:${badge.color}"` : ''}>
             ${i === 0 ? `<div class="scope-badge" style="color:${badge.color}">&#9658; ${badge.label}</div>` : ''}
@@ -442,7 +489,75 @@
           </div>`;
       }).join('');
 
-      result.style.display = 'block';
+      document.getElementById('result').style.display = 'block';
+    }
+
+    function renderForward(bytes) {
+      const origFirst = parseInt(bytes[0], 16);
+      const flipped   = origFirst ^ 0x02;
+      const addr      = canonical(eui64Groups(bytes));
+      const localBit  = !!(origFirst & 0x02);
+
+      document.getElementById('out-lbl').textContent = 'YOUR LINK-LOCAL ADDRESS';
+      const stepsHtml = `
+        <div class="step-row dim">── EUI-64 ────────────────────────────────</div>
+        <div class="step-row"><span class="dim">1. mac    </span><span class="step-hi">${bytes.join(':')}</span></div>
+        <div class="step-row"><span class="dim">2. insert </span><span class="step-hi">${bytes.slice(0,3).join(':')}</span><span class="dim">:ff:fe:</span><span class="step-hi">${bytes.slice(3).join(':')}</span></div>
+        <div class="step-row"><span class="dim">3. flip   </span><span class="step-flip">${hx(origFirst)} → ${hx(flipped)}</span><span class="dim"> (U/L bit)</span></div>
+        ${localBit ? `<div class="note">U/L bit already set — looks like a randomized / locally-administered MAC. The OS may be using stable-privacy addresses (RFC 7217) instead of EUI-64.</div>` : ''}
+      `;
+      showResult(addr, addr, stepsHtml, state.scopes);
+    }
+
+    function renderReverse(ll) {
+      const addr = canonical(ll.host);
+      const mac  = macFromHost(ll.host);
+
+      let scopes = state.scopes;
+      if (ll.zone) {
+        scopes = [{ iface: ll.zone, label: 'zone from your input' },
+                  ...scopes.filter(s => s.iface !== ll.zone)].slice(0, 3);
+      }
+
+      let lbl, big, stepsHtml;
+      if (mac) {
+        const hex       = ll.host.join('');
+        const first3    = hex.slice(0, 6).match(/.{2}/g).join(':');
+        const last3     = hex.slice(10).match(/.{2}/g).join(':');
+        const hostFirst = parseInt(hex.slice(0, 2), 16);
+        lbl = 'RECOVERED MAC ADDRESS';
+        big = mac.join(':');
+        stepsHtml = `
+          <div class="step-row dim">── EUI-64 REVERSED ───────────────────────</div>
+          <div class="step-row"><span class="dim">1. host   </span><span class="step-hi">${ll.host.join(':')}</span></div>
+          <div class="step-row"><span class="dim">2. drop   </span><span class="step-hi">${first3}</span><span class="dim">:ff:fe:</span><span class="step-hi">${last3}</span></div>
+          <div class="step-row"><span class="dim">3. flip   </span><span class="step-flip">${hx(hostFirst)} → ${hx(hostFirst ^ 0x02)}</span><span class="dim"> (U/L bit)</span></div>
+        `;
+      } else {
+        lbl = 'LINK-LOCAL ADDRESS';
+        big = addr;
+        stepsHtml = `<div class="note">no ff:fe marker — likely a privacy (RFC 4941) or stable-privacy (RFC 7217) address; the MAC can't be recovered from it.</div>`;
+      }
+      document.getElementById('out-lbl').textContent = lbl;
+      showResult(big, addr, stepsHtml, scopes);
+    }
+
+    function onMac(raw) {
+      const hint   = document.getElementById('mac-hint');
+      const result = document.getElementById('result');
+
+      const bytes = normalizeMac(raw);
+      if (bytes) { renderForward(bytes); return; }
+
+      const ll = parseLinkLocal(raw);
+      if (ll) { renderReverse(ll); return; }
+
+      result.style.display = 'none';
+      if (raw.replace(/[:\-.\s%\[\]]/g, '').length >= 12) {
+        hint.textContent = 'invalid address'; hint.className = 'err';
+      } else {
+        hint.textContent = HINT_DEFAULT; hint.className = '';
+      }
     }
   </script>
 
